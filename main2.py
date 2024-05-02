@@ -6,7 +6,7 @@ import os
 import shutil
 from youtubesearchpython import VideosSearch
 import asyncio
-
+import typing
 
 TOKEN=''
 
@@ -24,20 +24,21 @@ bot=commands.Bot(command_prefix='.',intents=intents)
 
 def search_yt(item):
     if item.startswith("https://"):
-        title = ydl.extract_info(item, download=False)["title"]
-        return{'URL':item, 'titulo':title}
+        cancion = ydl.extract_info(item, download=False)
+        title=cancion["title"]
+        url=cancion["url"]
+        return{'URL':url, 'titulo':title}
     search = VideosSearch(item, limit=1)
-    
-    return{'URL':search.result()["result"][0]["link"], 'titulo':search.result()["result"][0]["title"]}
+    link=search.result()["result"][0]["link"]
+    print(link)
+    cancion=ydl.extract_info(link,download=False)
+    title=cancion["title"]
+    url=cancion["url"]
+    return{'URL':url, 'titulo':title}   
 
 @bot.event
 async def on_ready():
     await bot.change_presence(activity = discord.Game(name=''))
-    LR_en_archivo = os.path.isdir("./Lista")
-    LR_carpeta = "./Lista"
-    if LR_en_archivo is True:
-        print("Removida la carpeta antigua")
-        shutil.rmtree(LR_carpeta)
     print('esta vivo')
 
 
@@ -64,12 +65,30 @@ async def desconectar(ctx):
     await ctx.voice_client.disconnect()
     await ctx.send("¡Desconectado del canal de voz!")
 
+#pasar cancion
+def revisar_lista(ctx):
+    voice = get(bot.voice_clients,guild = ctx.guild)
+    global lista
+    if len(lista)==0:
+        return
+    lista.pop(0)
+    if len(lista) > 0:
+        song=lista[0]
+        cancion=song['URL']
+        voice.play(discord.FFmpegPCMAudio(cancion,executable='ffmpeg',**FFMPEG_OPTIONS),after=lambda e: revisar_lista(ctx))
+
+
+
+
+
 @bot.command(pass_context = True)
 async def play(ctx, *args):
     
     global lista
-    
+
     query= " ".join(args)
+    if query.find("&list=")!=-1:
+        query=query[0:query.find("&list=")]
     song = search_yt(query)
     #CONECTAR CANAL
     if ctx.author.voice is None:
@@ -82,36 +101,23 @@ async def play(ctx, *args):
         await voz.move_to(canal)
     else:
         await canal.connect()
-
-
-    #FUNCION PASAR CANCION
-
-
-    def revisar_lista():
-        if len(lista) > 0:
-            lista.pop(0)
-            cancion=lista[0]
-            voice.play(discord.FFmpegPCMAudio(cancion,executable='ffmpeg',**FFMPEG_OPTIONS),after=lambda e: revisar_lista())
-    
+   
     if len(lista)>0:
-        data =  ydl.extract_info(song, download=False)
-        lista.append(data)
+        lista.append(song)
 
-        await ctx.send("Añadida la cancion "+str(data['titulo'])+" a la lista de reproduccion")\
+        await ctx.send("Añadida la cancion "+str(song['titulo'])+" a la lista de reproduccion")\
         
         print("cancion añadida")
         return
     #
     
-    await ctx.send("Todo lsito")
-
+    lista.append(song)
     voice = get(bot.voice_clients,guild = ctx.guild)
-  
-    data=  ydl.extract_info(song, download=False)
-    cancion=data['url']
-    voice.play(discord.FFmpegPCMAudio(cancion,executable='ffmpeg',**FFMPEG_OPTIONS),after=lambda e: revisar_lista())
+    
+    cancion=song['URL']
+    voice.play(discord.FFmpegPCMAudio(cancion,executable='ffmpeg',**FFMPEG_OPTIONS),after=lambda e: revisar_lista(ctx))
 
-    await ctx.send(f"reproduciendo: {data['titulo']}")
+    await ctx.send(f"reproduciendo: {song['titulo']}")
     print("Reproduciendo \n")
 
             
@@ -152,42 +158,70 @@ async def stop(ctx):
         print("No se esta reproduciendo, no se puede detener")
         await ctx.send("No se esta reproduciendo")
 
-
-listar = {}
+@bot.command(pass_context = True)
+async def skip(ctx):
+    global lista
+    voice = get(bot.voice_clients,guild=ctx.guild)
+    if voice and voice.is_playing():
+        if len(lista) > 1:
+            voice.stop()
+            lista.pop(0)
+            if len(lista) > 0:
+                song=lista[0]
+                cancion=song['URL']
+                voice.play(discord.FFmpegPCMAudio(cancion,executable='ffmpeg'),after=lambda e: revisar_lista(ctx))
+        else:
+            await ctx.send("No mas canciones en la lista")
 
 @bot.command(pass_context = True)
-async def lista(ctx,url:str):
-    Cancion_lista = os.path.isdir("./Lista")
-    if Cancion_lista is False:
-        os.mkdir("Lista")
-    DIR = os.path.abspath(os.path.realpath("Lista"))
-    Lista_num = len(os.listdir(DIR))
-    Lista_num+=1
-    agregar_lista = True
-    while agregar_lista:
-        if Lista_num is listar:
-            Lista_num+=1
+async def cola(ctx):
+    q=""
+    global lista
+    num=0
+    for cancion in lista:
+        if num==0:
+            num+=1
+            q += f"Sonando : {cancion['titulo']} \n"
         else:
-            agregar_lista = False
-            listar[Lista_num] = Lista_num
-    Lista_path = os.path.abspath(os.path.realpath("Lista") + f"\cancion{Lista_num}.%(ext)s")
-    ydl_op = {
-        'format':'bestaudio/best',
-        'quiet' : True,
-        'outtmpl' : Lista_path,
-        'ffmpeg_location':os.path.realpath('C:\\ffmpeg\\bin\\ffmpeg.exe'),
-        'postprocessors' : [{
-            'key' : 'FFmpegExtractAudio',
-            'preferredcodec' : 'mp3',
-            'preferredquality' : '192',
-        }],
-    }
-    with YoutubeDL(ydl_op) as ydl:
-        print("Descargar Cancion")
-        ydl.download([url])
+            q += f"{num} : {cancion['titulo']} \n"
+            num+=1
+    await ctx.send(q)
 
-    await ctx.send("Añadida la cancion "+str(Lista_num)+" a la lista de reproduccion")\
-    
-    print("cancion añadida")
+@bot.command(pass_context=True,name="remove", help="Remueve ultima cancion")
+async def re(ctx,num : typing.Optional[int] = None):
+    global lista
+    if num is None:
+        if len(lista)>1:
+            lista.pop()
+            await ctx.send("Ultima cancion eliminada")
+        else:
+            await ctx.send("Lista vacia")
+    else:
+        if len(lista)>1:
+            if num >0 and num<len(lista):
+                lista.pop()
+                await ctx.send("Cancion eliminada")
+        else:
+            await ctx.send("Lista vacia")
+@bot.event
+async def on_voice_state_update(member, before, after):
+    global lista
+    if after.channel is None and member==bot.user:
+        voice = get(bot.voice_clients)
+        voice.stop()
+        lista=[]
+
+@bot.command(pass_context=True)
+async def clear(ctx):
+    global lista
+    if len(lista)>0:
+        cancion=lista[0]
+        lista=[]
+        lista.append(cancion)
+        await ctx.send("Lista limpia")
+    else:
+        await ctx.send("Lista ya se encuentraba vacia")
+
+
 
 bot.run(TOKEN)
